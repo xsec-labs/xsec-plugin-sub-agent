@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {readFile} from 'node:fs/promises';
+import {pathToFileURL} from 'node:url';
+import {parseObserver,parseList,parseDetail,parseContext,statusMeta,isTerminalStatus,sortObservers,formatDuration,formatTime} from '../frontend-src/core.ts';
+if(!process.env.XSEC_SUBAGENT_BOUNDARY_EVIDENCE||!process.env.XSEC_SUBAGENT_BASELINE_ENTRY)throw Error('Real native-boundary evidence and original entry are required; see docs/shared-ui.md');
+const observed=JSON.parse(await readFile(process.env.XSEC_SUBAGENT_BOUNDARY_EVIDENCE,'utf8'));assert.equal(observed.status,'PASS');
+const original=await import(pathToFileURL(process.env.XSEC_SUBAGENT_BASELINE_ENTRY).href),rows=observed.lists[0].subagents;
+test('real native lists preserve counts and stable status ordering',()=>{assert.deepEqual(observed.lists.map(value=>parseList(value).length),[8,1,0]);assert.deepEqual(sortObservers(rows),original.sortObservers(rows));});
+test('real observer projection validates all fields',()=>{for(const row of rows)assert.deepEqual(parseObserver(row),row);assert.deepEqual(parseDetail(observed.detail,observed.detail.id),observed.detail);});
+test('detail identity must match bound entity',()=>{assert.throws(()=>parseDetail(observed.detail,rows[0].id),/绑定不匹配/);});
+test('missing or malformed list cannot become empty success',()=>{for(const subagents of [undefined,null,{},'invalid'])assert.throws(()=>parseList({subagents}),/列表格式无效/);});
+test('duplicate observed IDs are rejected',()=>{assert.throws(()=>parseList({subagents:[rows[0],rows[0]]}),/ID 重复/);});
+test('observed fields reject invalid type and nonfinite timestamps',()=>{assert.throws(()=>parseObserver({...rows[0],updated_at:NaN}),/更新时间/);assert.throws(()=>parseObserver({...rows[0],has_stderr_log:'false'}),/诊断记录/);assert.throws(()=>parseObserver({...rows[0],attempt:0}),/运行次数/);});
+test('public status and time helpers retain native projection behavior',()=>{for(const row of rows){assert.deepEqual(statusMeta(row.status),original.statusMeta(row.status));assert.equal(isTerminalStatus(row.status),original.isTerminalStatus(row.status));assert.equal(formatTime(row.started_at),original.formatTime(row.started_at));assert.equal(formatDuration(row.started_at,row.completed_at,row.updated_at),original.formatDuration(row.started_at,row.completed_at,row.updated_at));}});
+test('bound context preserves session and entity',()=>{const input={visible:true,tool:{kind:'subagent-detail',entityId:observed.detail.id},session:{session_id:'scope-a'},workspace:{binding:{sessionId:'scope-a'}}};assert.deepEqual(parseContext(input),{visible:true,kind:'subagent-detail',sessionId:'scope-a',entityId:observed.detail.id});});
+test('contradictory or invalid context fails explicitly',()=>{assert.throws(()=>parseContext({session:{session_id:'scope-a'},workspace:{binding:{sessionId:'scope-b'}}}),/绑定不一致/);assert.throws(()=>parseContext({tool:{kind:'unknown'}}),/工具类型无效/);assert.throws(()=>parseContext({visible:'false'}),/可见状态/);});
