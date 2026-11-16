@@ -1,21 +1,25 @@
+// XSEC Frontend API v2, single-file ESM. Read-only view of the session's sub-agents.
+// Colours, radii and spacing follow the Desktop design tokens the Host pushes as --xsec-* variables.
 const LIST_METHOD = "xsec.subagents.list";
 const GET_METHOD = "xsec.subagents.get";
 const OPEN_TOOL_METHOD = "xsec.workspace.tool.open";
+const TICK_INTERVAL_MS = 1_000;
 
+// status → [label, tone, sort rank]. Tones follow Desktop: info = in progress, warning = waiting, danger = failed.
 const STATUS = {
-  running: ["运行中", "running", 0],
-  starting: ["启动中", "running", 0],
+  running: ["运行中", "info", 0],
+  starting: ["启动中", "info", 0],
   cancelling: ["取消收口中", "warning", 0],
-  dispatched: ["排队中", "default", 1],
-  vuln: ["发现漏洞", "vuln", 2],
-  failed: ["运行失败", "failed", 2],
-  done: ["已完成", "done", 3],
-  completed: ["已完成", "done", 3],
-  cancelled: ["已取消", "default", 3],
+  dispatched: ["排队中", "neutral", 1],
+  vuln: ["发现漏洞", "danger", 2],
+  failed: ["运行失败", "danger", 2],
+  done: ["已完成", "success", 3],
+  completed: ["已完成", "success", 3],
+  cancelled: ["已取消", "neutral", 3],
 };
 
 export function statusMeta(status) {
-  return STATUS[status] ?? [status || "未知", "default", 4];
+  return STATUS[status] ?? [status || "未知", "neutral", 4];
 }
 
 export function isTerminalStatus(status) {
@@ -29,21 +33,36 @@ export function sortObservers(rows) {
   });
 }
 
+function toMillis(value) {
+  return value < 10_000_000_000 ? value * 1000 : value;
+}
+
 export function formatDuration(startedAt, completedAt, now = Date.now()) {
   if (!startedAt) return "—";
-  const start = startedAt < 10_000_000_000 ? startedAt * 1000 : startedAt;
-  const rawEnd = completedAt ?? now;
-  const end = rawEnd < 10_000_000_000 ? rawEnd * 1000 : rawEnd;
-  const seconds = Math.max(0, Math.floor((end - start) / 1000));
+  const seconds = Math.max(0, Math.floor((toMillis(completedAt ?? now) - toMillis(startedAt)) / 1000));
   if (seconds < 60) return `${seconds} 秒`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes} 分 ${seconds % 60} 秒`;
   return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
 }
 
+// Local time to the minute, the same shape Desktop lists use: 2026-01-02 15:04.
 export function formatTime(value) {
   if (!value) return "—";
-  return new Date(value < 10_000_000_000 ? value * 1000 : value).toLocaleString("zh-CN", { hour12: false });
+  const date = new Date(toMillis(value));
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (number) => String(number).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+export function formatRelative(value, now = Date.now()) {
+  if (!value) return "—";
+  const seconds = Math.floor((toMillis(now) - toMillis(value)) / 1000);
+  if (seconds < 10) return "刚刚";
+  if (seconds < 60) return `${seconds} 秒前`;
+  if (seconds < 3_600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86_400) return `${Math.floor(seconds / 3_600)} 小时前`;
+  return formatTime(value);
 }
 
 function element(tag, className, text) {
@@ -53,16 +72,113 @@ function element(tag, className, text) {
   return node;
 }
 
+function icon(path) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("class", "x-icon");
+  svg.setAttribute("aria-hidden", "true");
+  const shape = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  shape.setAttribute("d", path);
+  svg.append(shape);
+  return svg;
+}
+
+const ICON_ALERT = "M8 5.2v3.4M8 11h.01M8 1.8l6.4 11.4H1.6z";
+const ICON_CHEVRON = "M6 3.5 10.5 8 6 12.5";
+
+const BASE_CSS = `
+:root{--d-canvas:#f7f7f8;--d-surface:#fff;--d-subtle:#f0f0f2;--d-hover:#eaeaed;--d-text:#18181b;--d-muted:#62626b;--d-border:#dcdce1;--d-danger:#b42318;--d-success:#187344;--d-warning:#8a5700}
+@media (prefers-color-scheme:dark){:root{--d-canvas:#111113;--d-surface:#19191c;--d-subtle:#232327;--d-hover:#2d2d33;--d-text:#f4f4f5;--d-muted:#a1a1aa;--d-border:#35353c;--d-danger:#ff938a;--d-success:#7ad6a0;--d-warning:#e9bd70}}
+:root{--canvas:var(--xsec-window-background,var(--d-canvas));--surface:var(--xsec-content-surface,var(--d-surface));--subtle:var(--xsec-bg-subtle,var(--d-subtle));--hover:var(--xsec-bg-hover,var(--d-hover));--text:var(--xsec-text-primary,var(--d-text));--muted:var(--xsec-text-secondary,var(--d-muted));--border:var(--xsec-border-default,var(--d-border));--primary:var(--xsec-text-accent,var(--d-text));--danger:var(--xsec-status-error,var(--d-danger));--success:var(--xsec-status-success,var(--d-success));--warning:var(--xsec-status-warning,var(--d-warning));--info:color-mix(in srgb,#0169cc 68%,var(--text));--hairline:color-mix(in srgb,var(--text) 10%,transparent);--r-control:var(--xsec-radius-md,8px);--r-panel:var(--xsec-radius-lg,12px);--font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;--mono:ui-monospace,"SF Mono","Cascadia Mono",Consolas,"Liberation Mono",monospace}
+*,*::before,*::after{box-sizing:border-box}
+html,body,[data-xsec-plugin-root]{width:100%;height:100%;margin:0}
+body{overflow:hidden;background:var(--surface);color:var(--text);font:14px/1.45 var(--font);-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid var(--info);outline-offset:1px}
+.x-panel{display:flex;flex-direction:column;width:100%;height:100%;min-width:0;background:var(--surface)}
+.x-head{display:flex;align-items:center;gap:12px;min-height:52px;padding:8px 12px;border-bottom:1px solid var(--hairline)}
+.x-head-copy{display:grid;gap:2px;min-width:0;flex:1}
+.x-title{overflow:hidden;font-size:14px;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.x-sub{overflow:hidden;color:var(--muted);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.x-body{display:flex;flex:1;flex-direction:column;gap:12px;min-height:0;padding:12px;overflow:auto}
+.x-section{display:grid;gap:8px}
+.x-section-title{display:flex;align-items:baseline;gap:8px;margin:0;padding:0 4px;color:var(--muted);font-size:12px;font-weight:600}
+.x-count{font-weight:400;font-variant-numeric:tabular-nums}
+.x-card{border:1px solid var(--hairline);border-radius:var(--r-panel);background:var(--surface);padding:16px}
+.x-card.flush{padding:0;overflow:hidden}
+.x-card-title{margin:0 0 8px;font-size:14px;font-weight:600;line-height:32px}
+.x-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:4px 12px;width:100%;padding:10px 16px;border:0;border-top:1px solid var(--hairline);background:transparent;text-align:left;cursor:pointer;transition:background-color .12s}
+.x-row:first-child{border-top:0}
+.x-row:hover{background:var(--subtle)}
+.x-row:active{background:var(--hover)}
+.x-row:focus-visible{outline-offset:-2px}
+.x-row-title{overflow:hidden;font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.x-row-meta{display:flex;align-items:center;gap:8px;min-width:0;color:var(--muted);font-size:12px}
+.x-row-meta>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.x-badge{display:inline-flex;align-items:center;gap:6px;flex:none;padding:2px 8px;border-radius:999px;background:var(--subtle);color:var(--muted);font-size:12px;font-weight:600;line-height:18px;white-space:nowrap}
+.x-badge.success{background:color-mix(in srgb,var(--success) 12%,var(--surface));color:var(--success)}
+.x-badge.warning{background:color-mix(in srgb,var(--warning) 14%,var(--surface));color:var(--warning)}
+.x-badge.danger{background:color-mix(in srgb,var(--danger) 12%,var(--surface));color:var(--danger)}
+.x-badge.info{background:color-mix(in srgb,var(--info) 12%,var(--surface));color:var(--info)}
+.x-pulse{width:6px;height:6px;border-radius:50%;background:currentColor;animation:x-pulse 1.6s ease-in-out infinite}
+.x-tag{flex:none;padding:1px 6px;border-radius:6px;background:var(--subtle);color:var(--muted);font:12px/18px var(--mono)}
+.x-kv{display:grid;grid-template-columns:minmax(88px,max-content) minmax(0,1fr);gap:8px 16px;margin:0}
+.x-kv dt{color:var(--muted)}
+.x-kv dd{min-width:0;margin:0;overflow-wrap:anywhere;user-select:text;-webkit-user-select:text}
+.x-kv dd.mono,.x-mono{font-family:var(--mono);font-size:13px}
+.x-notice{display:flex;align-items:flex-start;gap:8px;padding:8px 12px;border:1px solid color-mix(in srgb,var(--tone) 32%,transparent);border-radius:var(--r-control);background:color-mix(in srgb,var(--tone) 8%,var(--surface));--tone:var(--info)}
+.x-notice.danger{--tone:var(--danger)}
+.x-notice.warning{--tone:var(--warning)}
+.x-notice svg{flex:none;margin-top:2px;color:var(--tone)}
+.x-notice-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.x-notice .x-btn{margin:-3px -6px -3px 0}
+.x-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;flex:none;height:32px;padding:0 12px;border:0;border-radius:var(--r-control);background:var(--subtle);font-weight:500;white-space:nowrap;cursor:pointer;transition:background-color .12s}
+.x-btn:hover{background:var(--hover)}
+.x-btn:disabled{opacity:.5;cursor:default;pointer-events:none}
+.x-btn.small{height:26px;padding:0 8px;font-size:12px}
+.x-btn.ghost{background:transparent}
+.x-btn.ghost:hover{background:var(--subtle)}
+.x-btn.primary{background:var(--primary);color:var(--surface)}
+.x-btn.primary:hover{background:color-mix(in srgb,var(--primary) 88%,var(--surface))}
+.x-icon{flex:none;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.x-empty{display:grid;flex:1;place-content:center;justify-items:center;gap:4px;padding:32px 24px;text-align:center}
+.x-empty strong{font-weight:600}
+.x-empty span{max-width:320px;color:var(--muted);font-size:13px}
+.x-spinner{width:20px;height:20px;margin-bottom:8px;border:2px solid var(--hairline);border-top-color:var(--muted);border-radius:50%;animation:x-spin .8s linear infinite}
+.x-num{font-variant-numeric:tabular-nums}
+@keyframes x-spin{to{transform:rotate(360deg)}}
+@keyframes x-pulse{50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.x-pulse,.x-spinner{animation:none}.x-row,.x-btn{transition:none}}
+`;
+const VIEW_CSS = `
+.sa-row .x-icon{color:var(--muted);opacity:.55;transition:opacity .12s}
+.sa-row:hover .x-icon,.sa-row:focus-visible .x-icon{opacity:1}
+.sa-row-end{display:flex;align-items:center;gap:8px;grid-row:1/span 2;grid-column:2}
+.sa-row.has-reason .sa-row-end{grid-row:1/span 3}
+.sa-reason{grid-column:1;overflow:hidden;color:var(--danger);font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+.sa-dot{color:var(--hairline)}
+@media (prefers-reduced-motion:reduce){.sa-row .x-icon{transition:none}}
+`;
+
 function installStyles() {
   if (document.getElementById("xsec-subagent-styles")) return;
   const style = document.createElement("style");
   style.id = "xsec-subagent-styles";
-  style.textContent = `
-    :root{color-scheme:dark;font-family:var(--xsec-font-family,Inter,"Segoe UI",sans-serif)}:root[data-xsec-theme="light"]{color-scheme:light}*{box-sizing:border-box}html,body,[data-xsec-plugin-root]{width:100%;height:100%;margin:0}body{overflow:hidden}button{font:inherit}
-    .sa-root{display:flex;width:100%;height:100%;min-width:0;flex-direction:column;overflow:hidden;background:#0c1018;color:#d6deeb}.sa-head{display:flex;min-height:52px;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid #232936;background:#101522}.sa-head-copy{display:grid;min-width:0;gap:2px}.sa-head strong{overflow:hidden;font-size:14px;text-overflow:ellipsis;white-space:nowrap}.sa-head small{color:#8b94a7;font-size:11px}.sa-back{display:grid;width:30px;height:30px;flex:0 0 auto;place-items:center;border:1px solid #293144;border-radius:7px;background:#151b29;color:#d6deeb;cursor:pointer}.sa-back:hover{border-color:#52617d}.sa-body{min-height:0;flex:1;overflow:auto;padding:14px}.sa-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.sa-summary div{display:grid;justify-items:center;gap:3px;padding:10px;border:1px solid #232936;border-radius:8px;background:#121722}.sa-summary strong{font-size:18px}.sa-summary span{color:#8b94a7;font-size:10px}.sa-notice{margin-bottom:12px;padding:8px 10px;border:1px solid rgba(91,116,255,.22);border-radius:7px;background:rgba(91,116,255,.09);color:#9eacff;font-size:11px;line-height:1.5}.sa-list{display:grid;gap:7px}.sa-row{display:grid;width:100%;min-width:0;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:10px;padding:10px;border:1px solid #232936;border-radius:8px;background:#111620;color:inherit;cursor:pointer;text-align:left}.sa-row:hover{border-color:#52617d;background:#151c2a}.sa-row-copy{display:grid;min-width:0;gap:3px}.sa-row strong,.sa-row small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sa-row strong{font-size:12.5px}.sa-row small{color:#8b94a7;font-size:10.5px}.sa-tag{display:inline-flex;min-height:22px;align-items:center;padding:2px 7px;border-radius:999px;background:#252b37;color:#aeb7c7;font-size:10px;white-space:nowrap}.sa-tag.running{background:rgba(91,116,255,.16);color:#9eacff}.sa-tag.warning{background:rgba(240,169,53,.14);color:#f0b959}.sa-tag.vuln,.sa-tag.failed{background:rgba(240,87,87,.14);color:#ff8f8f}.sa-tag.done{background:rgba(46,204,155,.14);color:#69ddb7}.sa-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:0 0 12px}.sa-detail-grid div{min-width:0;padding:10px;border:1px solid #232936;border-radius:8px;background:#111620}.sa-detail-grid dt{margin-bottom:5px;color:#8b94a7;font-size:10px}.sa-detail-grid dd{min-width:0;margin:0;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.sa-reason{padding:10px;border:1px solid rgba(240,169,53,.3);border-radius:8px;background:rgba(240,169,53,.09);color:#f0c477;font-size:11px;line-height:1.55}.sa-empty{display:grid;height:100%;place-content:center;justify-items:center;gap:9px;padding:28px;color:#8b94a7;text-align:center}.sa-empty strong{color:#d6deeb;font-size:14px}.sa-empty span{max-width:320px;font-size:12px;line-height:1.6}.sa-spinner{width:28px;height:28px;border:2px solid #293144;border-top-color:#5b74ff;border-radius:50%;animation:sa-spin .8s linear infinite}.sa-error{margin-bottom:10px;padding:8px;border-radius:7px;background:#2b1118;color:#f5a3a3;font-size:11px}@keyframes sa-spin{to{transform:rotate(360deg)}}@media(max-width:480px){.sa-detail-grid{grid-template-columns:1fr}.sa-body{padding:10px}}
-    :root[data-xsec-theme="light"] .sa-root{background:#f7f8fb;color:#202737}:root[data-xsec-theme="light"] .sa-head{border-color:#dde2ea;background:#fff}:root[data-xsec-theme="light"] .sa-row,:root[data-xsec-theme="light"] .sa-summary div,:root[data-xsec-theme="light"] .sa-detail-grid div{border-color:#dde2ea;background:#fff}:root[data-xsec-theme="light"] .sa-empty strong{color:#202737}
-  `;
+  style.textContent = BASE_CSS + VIEW_CSS;
   document.head.append(style);
+}
+
+// The Host pushes colours, not a mode. Native controls and scrollbars follow the surface's lightness.
+function followSurface() {
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:absolute;visibility:hidden;color:var(--surface)";
+  document.body.append(probe);
+  const channels = getComputedStyle(probe).color.match(/[\d.]+/g) ?? [];
+  probe.remove();
+  if (channels.length < 3) return;
+  const [red, green, blue] = channels.map(Number);
+  document.documentElement.style.colorScheme = red * 0.299 + green * 0.587 + blue * 0.114 < 128 ? "dark" : "light";
 }
 
 function contextValues(context) {
@@ -74,6 +190,22 @@ function contextValues(context) {
   };
 }
 
+function badge(status) {
+  const [label, tone] = statusMeta(status);
+  const node = element("span", `x-badge ${tone}`);
+  if (status === "running" || status === "starting") node.append(element("span", "x-pulse"));
+  node.append(document.createTextNode(label));
+  return node;
+}
+
+function rowTitle(row) {
+  return row.node_title || row.role || String(row.id).slice(0, 10);
+}
+
+function attemptText(row) {
+  return row.attempt > 1 ? `第 ${row.attempt} 次尝试` : "";
+}
+
 function createController(host) {
   let root = null;
   let context = contextValues(null);
@@ -83,16 +215,34 @@ function createController(host) {
   let loading = false;
   let generation = 0;
   let disposed = false;
-  const applyTheme = (theme) => {
-    document.documentElement.dataset.xsecTheme = theme?.["color-mode"] === "light" ? "light" : "dark";
+  let live = [];
+  let ticker = null;
+  const themeSubscription = host.onTheme(() => followSurface());
+
+  // Texts that depend on the clock (elapsed time, last activity) refresh in place once a second.
+  const liveText = (node, compute) => {
+    node.textContent = compute();
+    live.push([node, compute]);
+    return node;
   };
-  applyTheme({ "color-mode": getComputedStyle(document.documentElement).getPropertyValue("--xsec-color-mode").trim() });
-  const themeSubscription = host.onTheme(applyTheme);
+  const tick = () => {
+    if (document.visibilityState !== "visible") return;
+    for (const [node, compute] of live) node.textContent = compute();
+  };
 
   const empty = (title, description, spinner = false) => {
-    const node = element("div", "sa-empty");
-    if (spinner) node.append(element("span", "sa-spinner"));
-    node.append(element("strong", "", title), element("span", "", description));
+    const node = element("div", "x-empty");
+    if (spinner) node.append(element("span", "x-spinner"));
+    node.append(element("strong", "", title));
+    if (description) node.append(element("span", "", description));
+    return node;
+  };
+
+  const notice = (tone, message, action) => {
+    const node = element("div", `x-notice ${tone}`);
+    node.setAttribute("role", tone === "danger" ? "alert" : "status");
+    node.append(icon(ICON_ALERT), element("span", "x-notice-text", message));
+    if (action) node.append(action);
     return node;
   };
 
@@ -106,89 +256,140 @@ function createController(host) {
     }
   };
 
+  const listRow = (row) => {
+    const title = rowTitle(row);
+    const reason = !isTerminalStatus(row.status) ? "" : row.status === "failed" || row.status === "vuln" ? row.status_reason || "" : "";
+    const button = element("button", `x-row sa-row${reason ? " has-reason" : ""}`);
+    button.type = "button";
+    button.setAttribute("aria-label", `查看子 Agent ${title}`);
+    const meta = element("span", "x-row-meta");
+    meta.append(element("span", "x-tag", row.role || "sub"));
+    const attempt = attemptText(row);
+    if (attempt) meta.append(element("span", "", attempt));
+    const timing = element("span", "x-num");
+    if (isTerminalStatus(row.status)) timing.textContent = `结束于 ${formatTime(row.completed_at)}`;
+    else if (row.status === "dispatched") timing.textContent = "等待调度";
+    else liveText(timing, () => `已运行 ${formatDuration(row.started_at, null)}`);
+    meta.append(timing);
+    const end = element("span", "sa-row-end");
+    end.append(badge(row.status), icon(ICON_CHEVRON));
+    button.append(element("span", "x-row-title", title), end, meta);
+    if (reason) {
+      const line = element("span", "sa-reason", reason);
+      line.title = reason;
+      button.append(line);
+    }
+    button.addEventListener("click", () => void open("subagent-detail", row.node_title || row.role || "子 Agent 详情", row.id));
+    return button;
+  };
+
+  const group = (title, items) => {
+    const section = element("section", "x-section");
+    const heading = element("h2", "x-section-title", title);
+    heading.append(element("span", "x-count", String(items.length)));
+    const card = element("div", "x-card flush");
+    for (const row of items) card.append(listRow(row));
+    section.append(heading, card);
+    return section;
+  };
+
   const renderList = (body) => {
     if (!context.sessionId) {
       body.append(empty("暂无子 Agent", "当前会话未绑定任务，或主 Agent 尚未派发子任务。"));
       return;
     }
     if (loading && !rows.length) {
-      body.append(empty("正在读取子 Agent", "正在同步运行状态…", true));
+      body.append(empty("正在读取子 Agent", "", true));
       return;
     }
     if (!rows.length) {
-      body.append(empty("暂无子 Agent", "主 Agent 派发子任务后会出现在这里。"));
+      if (!error) body.append(empty("暂无子 Agent", "主 Agent 派发子任务后会出现在这里。"));
       return;
     }
-    const inFlight = rows.filter((row) => !isTerminalStatus(row.status)).length;
-    const summary = element("div", "sa-summary");
-    for (const [value, label] of [[rows.length, "全部"], [inFlight, "进行中"], [rows.length - inFlight, "已结束"]]) {
-      const item = element("div");
-      item.append(element("strong", "", String(value)), element("span", "", label));
-      summary.append(item);
+    const active = rows.filter((row) => !isTerminalStatus(row.status));
+    const ended = rows.filter((row) => isTerminalStatus(row.status));
+    if (active.length) body.append(group("进行中", active));
+    if (ended.length) body.append(group("已结束", ended));
+  };
+
+  const keyValues = (pairs) => {
+    const list = element("dl", "x-kv");
+    for (const [label, value, className] of pairs) {
+      const term = element("dt", "", label);
+      const data = element("dd", className || "");
+      if (typeof value === "function") liveText(data, value);
+      else data.textContent = value;
+      list.append(term, data);
     }
-    body.append(summary, element("div", "sa-notice", "仅查看，无法人工干预。子 Agent 详情由当前插件独立渲染。"));
-    const list = element("div", "sa-list");
-    for (const row of rows) {
-      const button = element("button", "sa-row");
-      button.type = "button";
-      button.setAttribute("aria-label", `查看子 Agent ${row.node_title || row.role || row.id}`);
-      const copy = element("span", "sa-row-copy");
-      const timing = isTerminalStatus(row.status)
-        ? `结束于 ${formatTime(row.completed_at)}`
-        : row.status === "dispatched"
-          ? "等待调度"
-          : `已运行 ${formatDuration(row.started_at, null)}`;
-      copy.append(element("strong", "", row.node_title || row.role || row.id.slice(0, 10)), element("small", "", `${row.role || "sub"}${row.attempt > 1 ? ` · attempt ${row.attempt}` : ""}`), element("small", "", timing));
-      const meta = statusMeta(row.status);
-      button.append(copy, element("span", `sa-tag ${meta[1]}`, meta[0]));
-      button.addEventListener("click", () => void open("subagent-detail", row.node_title || row.role || "子 Agent 详情", row.id));
-      list.append(button);
-    }
-    body.append(list);
+    return list;
+  };
+
+  const card = (title, content) => {
+    const node = element("section", "x-card");
+    node.append(element("h2", "x-card-title", title), content);
+    return node;
   };
 
   const renderDetail = (body) => {
     if (loading && !detail) {
-      body.append(empty("正在读取子 Agent", "正在同步运行详情…", true));
+      body.append(empty("正在读取子 Agent", "", true));
       return;
     }
     if (!detail) {
-      body.append(empty("子 Agent 不存在", "无法读取对应的子 Agent 记录。"));
+      if (!error) body.append(empty("子 Agent 不存在", "无法读取对应的子 Agent 记录。"));
       return;
     }
-    body.append(element("div", "sa-notice", "此页面由子 Agent 插件只读渲染，不能发送消息、取消、审批或重试。"));
-    const grid = element("dl", "sa-detail-grid");
-    const fields = [
-      ["状态", statusMeta(detail.status)[0]],
-      ["运行耗时", formatDuration(detail.started_at, detail.completed_at)],
-      ["开始时间", formatTime(detail.started_at)],
-      ["最近活动", formatTime(detail.heartbeat_at ?? detail.updated_at)],
-      ["运行 ID", detail.runner_run_id || "尚未创建"],
-      ["ACP 会话", detail.acp_session_id || "尚未注册"],
-    ];
-    for (const [label, value] of fields) {
-      const item = element("div");
-      item.append(element("dt", "", label), element("dd", "", value));
-      item.querySelector("dd").title = value;
-      grid.append(item);
+    const current = detail;
+    if (current.status_reason) {
+      body.append(notice(current.status === "failed" || current.status === "vuln" ? "danger" : "warning", current.status_reason));
     }
-    body.append(grid);
-    if (detail.status_reason) body.append(element("div", "sa-reason", detail.status_reason));
+    const ended = isTerminalStatus(current.status);
+    const run = [
+      ["运行耗时", ended ? formatDuration(current.started_at, current.completed_at) : () => formatDuration(current.started_at, null), "x-num"],
+      ["开始时间", formatTime(current.started_at), "x-num"],
+    ];
+    if (ended) run.push(["结束时间", formatTime(current.completed_at), "x-num"]);
+    const activity = current.heartbeat_at ?? current.updated_at;
+    run.push(["最近活动", ended ? formatTime(activity) : () => formatRelative(activity), "x-num"]);
+    body.append(
+      card("运行", keyValues(run)),
+      card("标识", keyValues([
+        ["运行 ID", current.runner_run_id || "尚未创建", current.runner_run_id ? "mono" : ""],
+        ["ACP 会话", current.acp_session_id || "尚未注册", current.acp_session_id ? "mono" : ""],
+      ])),
+    );
+  };
+
+  const summary = () => {
+    if (!rows.length) return "";
+    const active = rows.filter((row) => !isTerminalStatus(row.status)).length;
+    return active ? `共 ${rows.length} 个，${active} 个进行中` : `共 ${rows.length} 个，均已结束`;
   };
 
   const render = () => {
     if (!root) return;
-    const shell = element("section", "sa-root");
-    shell.setAttribute("aria-label", context.kind === "subagent-detail" ? "子 Agent 运行详情" : "子 Agent");
-    const head = element("header", "sa-head");
-    const copy = element("span", "sa-head-copy");
-    const title = context.kind === "subagent-detail" ? detail?.node_title || detail?.role || "子 Agent 详情" : "子 Agent";
-    const subtitle = context.kind === "subagent-detail" && detail ? `${detail.role || "sub"} · attempt ${detail.attempt}` : "攻击路径关联运行";
-    copy.append(element("strong", "", title), element("small", "", subtitle));
+    live = [];
+    const isDetail = context.kind === "subagent-detail";
+    const shell = element("section", "x-panel");
+    shell.setAttribute("aria-label", isDetail ? "子 Agent 运行详情" : "子 Agent");
+    const head = element("header", "x-head");
+    const copy = element("span", "x-head-copy");
+    const title = isDetail ? detail?.node_title || detail?.role || "子 Agent 详情" : "子 Agent";
+    const subtitle = isDetail
+      ? detail ? [detail.role || "sub", attemptText(detail)].filter(Boolean).join(" · ") : ""
+      : summary();
+    copy.append(element("strong", "x-title", title));
+    if (subtitle) copy.append(element("span", "x-sub", subtitle));
     head.append(copy);
-    const body = element("div", "sa-body");
-    if (error) body.append(element("div", "sa-error", error));
-    if (context.kind === "subagent-detail") renderDetail(body);
+    if (isDetail && detail) head.append(badge(detail.status));
+    const body = element("div", "x-body");
+    if (error) {
+      const retry = element("button", "x-btn small", "重试");
+      retry.type = "button";
+      retry.addEventListener("click", () => void load());
+      body.append(notice("danger", error, retry));
+    }
+    if (isDetail) renderDetail(body);
     else renderList(body);
     shell.append(head, body);
     root.replaceChildren(shell);
@@ -250,14 +451,18 @@ function createController(host) {
     async mount(nextRoot, initialContext) {
       root = nextRoot;
       installStyles();
+      followSurface();
+      ticker = window.setInterval(tick, TICK_INTERVAL_MS);
       update(initialContext);
-      },
+    },
     async update(nextContext) {
       update(nextContext);
     },
     async dispose() {
       disposed = true;
       generation += 1;
+      window.clearInterval(ticker);
+      live = [];
       themeSubscription.dispose();
       root?.replaceChildren();
     },
