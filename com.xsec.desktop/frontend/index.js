@@ -262,7 +262,7 @@ function createController(host) {
     const reason = !isTerminalStatus(row.status) ? "" : row.status === "failed" || row.status === "vuln" ? row.status_reason || "" : "";
     const button = element("button", `x-row sa-row${reason ? " has-reason" : ""}`);
     button.type = "button";
-    button.setAttribute("aria-label", `查看子 Agent ${title}，${statusMeta(row.status).label}`);
+    button.setAttribute("aria-label", `查看子 Agent ${title}，${statusMeta(row.status)[0]}`);
     const meta = element("span", "x-row-meta");
     meta.append(element("span", "x-tag", row.role || "sub"));
     const attempt = attemptText(row);
